@@ -1044,16 +1044,20 @@ static void GBALink_sendHeartbeatIfNeeded(const struct timeval* now) {
                       (now->tv_usec - gl.last_packet_sent.tv_usec) / 1000;
 
     if (elapsed_ms >= HEARTBEAT_INTERVAL_MS) {
+        bool should_disconnect = false;
         pthread_mutex_lock(&gl.mutex);
         bool sent_ok = send_packet(CMD_HEARTBEAT, NULL, 0, 0);
         if (sent_ok) {
             gl.last_packet_sent = *now;
         } else {
-            // Heartbeat send failed - connection is dead
+            // Defer disconnect until after mutex release to avoid self-deadlock.
+            should_disconnect = true;
+        }
+        pthread_mutex_unlock(&gl.mutex);
+        if (should_disconnect) {
             GBALink_disconnect();
             return;
         }
-        pthread_mutex_unlock(&gl.mutex);
     }
 }
 

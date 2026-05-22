@@ -719,7 +719,7 @@ bool Netplay_preFrame(void) {
 }
 
 uint16_t Netplay_getInputState(unsigned port) {
-    if (!Netplay_isConnected()) return 0;
+    if (!Netplay_isConnected() || port > 1) return 0;
 
     pthread_mutex_lock(&np.mutex);
     FrameInput* slot = get_frame_slot(np.run_frame);
@@ -730,6 +730,11 @@ uint16_t Netplay_getInputState(unsigned port) {
 }
 
 uint32_t Netplay_getPlayerButtons(unsigned port, uint32_t local_buttons) {
+    // Only map netplay to P1/P2 ports. Extra ports stay disconnected.
+    if (port > 1) {
+        return 0;
+    }
+
     // When netplay active, inputs come from the synchronized frame buffer
     // Host = Player 1, Client = Player 2 (always)
     // Both devices see identical inputs for same frame

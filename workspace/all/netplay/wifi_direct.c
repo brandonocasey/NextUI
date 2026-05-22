@@ -5,15 +5,21 @@
 
 #include "wifi_direct.h"
 
+#include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 // Simple logging - writes to stderr which goes to the log file
 #define LOG_error(fmt, ...) fprintf(stderr, "[ERROR] " fmt, ##__VA_ARGS__)
 
 #define WPA_CLI_CMD "wpa_cli -p /etc/wifi/sockets -i wlan0"
+#define WPA_CLI_BIN "wpa_cli"
+#define WPA_CLI_SOCKET_DIR "/etc/wifi/sockets"
+#define WPA_CLI_IFACE "wlan0"
 #define WIFI_CONNECT_TIMEOUT_MS 15000
 #define WIFI_CONNECT_CHECK_INTERVAL_MS 500
 #define WIFI_SCAN_RETRIES 3
@@ -27,6 +33,88 @@ static char hotspot_previous_ssid[128] = {0};
 // Helper to sleep in milliseconds
 static void wifi_sleep_ms(int ms) {
     usleep(ms * 1000);
+}
+
+// Execute command without shell interpolation and silence stdout/stderr.
+static int wifi_exec_silent(const char* const argv[]) {
+    if (!argv || !argv[0]) {
+        return -1;
+    }
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        return -1;
+    }
+    if (pid == 0) {
+        int devnull = open("/dev/null", O_WRONLY);
+        if (devnull >= 0) {
+            dup2(devnull, STDOUT_FILENO);
+            dup2(devnull, STDERR_FILENO);
+            close(devnull);
+        }
+        execvp(argv[0], (char* const*)argv);
+        _exit(127);
+    }
+
+    int status = 0;
+    while (waitpid(pid, &status, 0) < 0) {
+        if (errno == EINTR) {
+            continue;
+        }
+        return -1;
+    }
+
+    return (WIFEXITED(status) && WEXITSTATUS(status) == 0) ? 0 : -1;
+}
+
+static int wifi_run_wpa_cli(const char* arg0,
+                            const char* arg1,
+                            const char* arg2,
+                            const char* arg3,
+                            const char* arg4) {
+    const char* argv[] = {
+        WPA_CLI_BIN, "-p", WPA_CLI_SOCKET_DIR, "-i", WPA_CLI_IFACE,
+        arg0, arg1, arg2, arg3, arg4, NULL
+    };
+    return wifi_exec_silent(argv);
+}
+
+// Build a quoted wpa_cli string value and escape embedded " and \.
+static bool wifi_build_quoted_value(const char* value, char* out, size_t out_size) {
+    if (!value || !out || out_size < 3) {
+        return false;
+    }
+
+    size_t out_idx = 0;
+    out[out_idx++] = '"';
+    for (size_t i = 0; value[i] != '\0'; i++) {
+        unsigned char ch = (unsigned char)value[i];
+
+        // Reject control characters that can break parser behavior.
+        if (ch < 0x20 || ch == 0x7F) {
+            return false;
+        }
+
+        if (ch == '"' || ch == '\\') {
+            if (out_idx + 2 >= out_size) {
+                return false;
+            }
+            out[out_idx++] = '\\';
+            out[out_idx++] = (char)ch;
+        } else {
+            if (out_idx + 1 >= out_size) {
+                return false;
+            }
+            out[out_idx++] = (char)ch;
+        }
+    }
+
+    if (out_idx + 2 > out_size) {
+        return false;
+    }
+    out[out_idx++] = '"';
+    out[out_idx] = '\0';
+    return true;
 }
 
 // Forward declaration
@@ -277,11 +365,23 @@ void WIFI_direct_saveCurrentConnection(void) {
 
 int WIFI_direct_connect(const char* ssid, const char* pass)
 {
-    if (!ssid) {
+    if (!ssid || !ssid[0]) {
         return -1;
     }
 
-    char cmd[512];
+    char ssid_quoted[(WIFI_DIRECT_SSID_MAX * 2) + 3];
+    if (!wifi_build_quoted_value(ssid, ssid_quoted, sizeof(ssid_quoted))) {
+        LOG_error("WIFI_direct_connect: invalid SSID\n");
+        return -1;
+    }
+
+    char pass_quoted[259];
+    bool has_pass = (pass && pass[0] != '\0');
+    if (has_pass && !wifi_build_quoted_value(pass, pass_quoted, sizeof(pass_quoted))) {
+        LOG_error("WIFI_direct_connect: invalid password\n");
+        return -1;
+    }
+
     int net_id = -1;
     bool created_new = false;
 
@@ -299,8 +399,9 @@ int WIFI_direct_connect(const char* ssid, const char* pass)
                         net_id = id;
                     } else {
                         // New password provided - remove old entry
-                        snprintf(cmd, sizeof(cmd), WPA_CLI_CMD " remove_network %d >/dev/null 2>&1", id);
-                        system(cmd);
+                        char id_str[16];
+                        snprintf(id_str, sizeof(id_str), "%d", id);
+                        wifi_run_wpa_cli("remove_network", id_str, NULL, NULL, NULL);
                     }
                     break;
                 }
@@ -329,24 +430,43 @@ int WIFI_direct_connect(const char* ssid, const char* pass)
 
         created_new = true;
 
+        char net_id_str[16];
+        snprintf(net_id_str, sizeof(net_id_str), "%d", net_id);
+
         // Set SSID
-        snprintf(cmd, sizeof(cmd), WPA_CLI_CMD " set_network %d ssid '\"%s\"' >/dev/null 2>&1", net_id, ssid);
-        system(cmd);
+        if (wifi_run_wpa_cli("set_network", net_id_str, "ssid", ssid_quoted, NULL) != 0) {
+            LOG_error("WIFI_direct_connect: failed to set SSID\n");
+            wifi_run_wpa_cli("remove_network", net_id_str, NULL, NULL, NULL);
+            return -1;
+        }
 
         // Set password or open network
-        if (pass && strlen(pass) > 0) {
-            snprintf(cmd, sizeof(cmd), WPA_CLI_CMD " set_network %d psk '\"%s\"' >/dev/null 2>&1", net_id, pass);
-            system(cmd);
+        if (has_pass) {
+            if (wifi_run_wpa_cli("set_network", net_id_str, "psk", pass_quoted, NULL) != 0) {
+                LOG_error("WIFI_direct_connect: failed to set PSK\n");
+                wifi_run_wpa_cli("remove_network", net_id_str, NULL, NULL, NULL);
+                return -1;
+            }
         } else {
             // Open network (no password)
-            snprintf(cmd, sizeof(cmd), WPA_CLI_CMD " set_network %d key_mgmt NONE >/dev/null 2>&1", net_id);
-            system(cmd);
+            if (wifi_run_wpa_cli("set_network", net_id_str, "key_mgmt", "NONE", NULL) != 0) {
+                LOG_error("WIFI_direct_connect: failed to set open-network mode\n");
+                wifi_run_wpa_cli("remove_network", net_id_str, NULL, NULL, NULL);
+                return -1;
+            }
         }
     }
 
     // Enable and select the network
-    snprintf(cmd, sizeof(cmd), WPA_CLI_CMD " select_network %d >/dev/null 2>&1", net_id);
-    system(cmd);
+    char net_id_str[16];
+    snprintf(net_id_str, sizeof(net_id_str), "%d", net_id);
+    if (wifi_run_wpa_cli("select_network", net_id_str, NULL, NULL, NULL) != 0) {
+        LOG_error("WIFI_direct_connect: failed to select network\n");
+        if (created_new) {
+            wifi_run_wpa_cli("remove_network", net_id_str, NULL, NULL, NULL);
+        }
+        return -1;
+    }
 
     // Wait for connection (with timeout)
     int elapsed = 0;
@@ -381,8 +501,7 @@ int WIFI_direct_connect(const char* ssid, const char* pass)
     LOG_error("WIFI_direct_connect: connection timeout\n");
     // Clean up on failure (only if we created a new entry)
     if (created_new) {
-        snprintf(cmd, sizeof(cmd), WPA_CLI_CMD " remove_network %d >/dev/null 2>&1", net_id);
-        system(cmd);
+        wifi_run_wpa_cli("remove_network", net_id_str, NULL, NULL, NULL);
     }
 
     return -1;
