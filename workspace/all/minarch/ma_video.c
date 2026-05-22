@@ -949,6 +949,7 @@ void video_refresh_callback(const void* data, unsigned width, unsigned height, s
 
 	// Early exit if quitting to avoid rendering stale frames
 	if (quit) return;
+	if (minarch_skip_video_output) return;
 
 	// Allocate RGBA buffer if needed
 	if (!rgbaData || rgbaDataSize != width * height) {

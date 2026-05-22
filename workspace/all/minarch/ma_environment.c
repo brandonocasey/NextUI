@@ -5,6 +5,7 @@
 #include "ma_input.h"
 #include "ra_integration.h"
 #include "ma_environment.h"
+#include "gbalink.h"
 
 static bool set_rumble_state(unsigned port, enum retro_rumble_effect effect, uint16_t strength) {
 	// TODO: handle other args? not sure I can
@@ -149,7 +150,7 @@ bool environment_callback(unsigned cmd, void *data) { // copied from picoarch in
 	case RETRO_ENVIRONMENT_GET_LOG_INTERFACE: { /* 27 */
 		struct retro_log_callback *log_cb = (struct retro_log_callback *)data;
 		if (log_cb)
-			log_cb->log = (void (*)(enum retro_log_level, const char*, ...))LOG_note; // same difference
+			log_cb->log = (void (*)(enum retro_log_level, const char*, ...))minarch_core_log_callback;
 		break;
 	}
 	case RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY: { /* 31 */
@@ -355,6 +356,17 @@ bool environment_callback(unsigned cmd, void *data) { // copied from picoarch in
 		}
 		break;
 	}
+#ifdef RETRO_ENVIRONMENT_SET_NETPACKET_INTERFACE
+	case RETRO_ENVIRONMENT_SET_NETPACKET_INTERFACE: {
+		const struct retro_netpacket_callback *cb =
+			(const struct retro_netpacket_callback *)data;
+		if (cb) {
+			core.has_netpacket = true;
+			GBALink_setCoreCallbacks(cb);
+		}
+		return true;
+	}
+#endif
 	// used by fceumm
 	// TODO: used by gambatte for L/R palette switching (seems like it needs to return true even if data is NULL to indicate support)
 	case RETRO_ENVIRONMENT_SET_VARIABLE: {

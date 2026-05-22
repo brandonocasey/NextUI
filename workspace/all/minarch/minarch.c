@@ -1,4 +1,6 @@
 #include <stdlib.h>
+#include <stdarg.h>
+#include <stdio.h>
 #include <msettings.h>
 
 #include <SDL2/SDL_image.h>
@@ -19,6 +21,11 @@
 #include "ma_environment.h"
 #include "ma_config.h"
 #include "ma_runframe.h"
+#include "minarch.h"
+#include "netplay.h"
+#include "gbalink.h"
+#include "gblink.h"
+#include "netplay_helper.h"
 
 ///////////////////////////////////////
 
@@ -67,6 +74,9 @@ int DEVICE_WIDTH = 0;
 int DEVICE_HEIGHT = 0;
 int DEVICE_PITCH = 0;
 int shader_reset_suppressed = 0;
+int minarch_option_batch_mode = 0;
+int minarch_option_batch_changed = 0;
+int minarch_skip_video_output = 0;
 
 GFX_Renderer renderer;
 
@@ -257,7 +267,24 @@ int main(int argc , char* argv[]) {
 	while (!quit) {
 		GFX_startFrame();
 
-		run_frame();
+		if (!Netplay_update((uint16_t)Input_getButtonsMask(), core.serialize_size, core.serialize, core.unserialize)) {
+			input_poll_callback();
+			hdmimon();
+			continue;
+		}
+
+		GBALink_update();
+		GBALink_pollAndDeliverPackets();
+
+		if (Multiplayer_isActive()) {
+			core.run();
+		}
+		else {
+			run_frame();
+		}
+		if (Netplay_isActive()) {
+			Netplay_postFrame();
+		}
 		
 		// Process RetroAchievements for this frame
 		RA_doFrame();
@@ -312,13 +339,27 @@ int main(int argc , char* argv[]) {
 		}
 
 		if (show_menu) {
+			if (Netplay_isConnected()) {
+				Netplay_pause();
+			}
 			PWR_updateFrequency(PWR_UPDATE_FREQ,1);
 			Menu_loop();
 			// Process RA async operations while menu is shown
 			RA_idle();
+			if (Netplay_isPaused()) {
+				Netplay_resume();
+			}
 			PWR_updateFrequency(PWR_UPDATE_FREQ_INGAME,0);
 			has_pending_opt_change = config.core.changed;
 			chooseSyncRef();
+			if (Multiplayer_isActive()) {
+				fast_forward = setFastForward(0);
+				ff_toggled = 0;
+				ff_hold_active = 0;
+				rewind_toggle = 0;
+				rewind_pressed = 0;
+				rewinding = 0;
+			}
 		}
 
 		Audio_checkAndResetIfNeeded();
@@ -348,6 +389,7 @@ int main(int argc , char* argv[]) {
 
 finish:
     Perf_setCPUMonitorEnabled(0);
+	Netplay_quitAll();
 
 	// Unload game and shutdown RetroAchievements before Notification_quit —
 	// RA background threads (sync, badge downloads) may call notification
@@ -375,4 +417,97 @@ finish:
 	GFX_quit();
 	Menu_waitScreenshot();
 	return EXIT_SUCCESS;
+}
+
+SDL_Surface* minarch_getScreen(void) {
+	return screen;
+}
+int minarch_getDeviceWidth(void) {
+	return DEVICE_WIDTH;
+}
+int minarch_getDeviceHeight(void) {
+	return DEVICE_HEIGHT;
+}
+SDL_Surface* minarch_getMenuBitmap(void) {
+	return Menu_getBitmap();
+}
+
+const char* minarch_getCoreTag(void) {
+	return core.tag;
+}
+const char* minarch_getGameName(void) {
+	return game.name;
+}
+void* minarch_getGameData(void) {
+	return game.data;
+}
+size_t minarch_getGameSize(void) {
+	return game.size;
+}
+
+char* minarch_getCoreOptionValue(const char* key) {
+	return OptionList_getOptionValue(&config.core, key);
+}
+void minarch_setCoreOptionValue(const char* key, const char* value) {
+	OptionList_setOptionValue(&config.core, key, value);
+}
+
+void minarch_beginOptionsBatch(void) {
+	minarch_option_batch_mode = 1;
+	minarch_option_batch_changed = 0;
+}
+void minarch_endOptionsBatch(void) {
+	minarch_option_batch_mode = 0;
+	if (minarch_option_batch_changed) {
+		config.core.changed = 1;
+		minarch_option_batch_changed = 0;
+	}
+}
+
+void minarch_forceCoreOptionUpdate(void) {
+	minarch_skip_video_output = 1;
+	core.run();
+	minarch_skip_video_output = 0;
+}
+
+void minarch_saveConfig(void) {
+	Config_write(CONFIG_WRITE_ALL);
+}
+
+void minarch_reloadGame(void) {
+	SRAM_write();
+	core.unload_game();
+
+	struct retro_game_info game_info;
+	game_info.path = game.tmp_path[0] ? game.tmp_path : game.path;
+	game_info.data = game.data;
+	game_info.size = game.size;
+	core.load_game(&game_info);
+
+	SRAM_read();
+	Core_updateAVInfo();
+}
+
+void minarch_beforeSleep(void) {
+	Menu_beforeSleep();
+}
+void minarch_afterSleep(void) {
+	Menu_afterSleep();
+}
+void minarch_hdmimon(void) {
+	hdmimon();
+}
+int minarch_menuMessage(char* message, char** pairs) {
+	return Menu_message(message, pairs);
+}
+
+void minarch_core_log_callback(enum retro_log_level level, const char* fmt, ...) {
+	char buffer[512];
+	va_list args;
+	va_start(args, fmt);
+	vsnprintf(buffer, sizeof(buffer), fmt, args);
+	va_end(args);
+
+	LOG_note(level, "%s", buffer);
+	GBLink_processLogMessage(buffer);
 }

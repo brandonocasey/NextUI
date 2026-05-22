@@ -9,11 +9,14 @@
 typedef struct MenuList MenuList;
 typedef struct MenuItem MenuItem;
 
+#ifndef MINARCH_MENU_CALLBACK_ENUM_DEFINED
+#define MINARCH_MENU_CALLBACK_ENUM_DEFINED
 enum {
 	MENU_CALLBACK_NOP,
 	MENU_CALLBACK_EXIT,
 	MENU_CALLBACK_NEXT_ITEM,
 };
+#endif
 
 typedef int (*MenuList_callback_t)(MenuList* list, int i);
 

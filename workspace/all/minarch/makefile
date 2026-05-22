@@ -21,11 +21,16 @@ SDL?=SDL
 
 TARGET = minarch
 PRODUCT= build/$(PLATFORM)/$(TARGET).elf
-INCDIR = -I. -I./libretro-common/include/ -I../common/ -I../../$(PLATFORM)/platform/
+INCDIR = -I. -I./libretro-common/include/ -I../common/ -I../../$(PLATFORM)/platform/ -I../netplay/
 SOURCE = $(TARGET).c ma_cheats.c ma_rewind.c ma_audio.c ma_input.c \
          ma_options.c ma_frontend_opts.c ma_saves.c ma_video.c ma_core.c ma_game.c ma_environment.c ma_config.c ma_menu.c ma_runframe.c \
          ../common/scaler.c ../common/utils.c ../common/config.c ../common/api.c \
-         ../common/notification.c ../../$(PLATFORM)/platform/platform.c
+         ../common/notification.c ../../$(PLATFORM)/platform/platform.c \
+         ../netplay/netplay.c ../netplay/gbalink.c ../netplay/gblink.c ../netplay/network_common.c ../netplay/netplay_helper.c ../netplay/keyboard.c
+ifneq (,$(filter tg5040 tg5050,$(PLATFORM)))
+SOURCE += ../netplay/wifi_direct.c
+CFLAGS += -DHAS_WIFIMG
+endif
 
 # RA support
 ifneq (,$(filter $(PLATFORM),tg5040 tg5050 my355 desktop))

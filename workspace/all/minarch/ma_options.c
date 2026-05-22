@@ -312,7 +312,12 @@ void OptionList_setOptionValue(OptionList* list, const char* key, const char* va
 	Option* item = OptionList_getOption(list, key);
 	if (item) {
 		Option_setValue(item, value);
-		list->changed = 1;
+		if (minarch_option_batch_mode) {
+			minarch_option_batch_changed = 1;
+		}
+		else {
+			list->changed = 1;
+		}
 		// LOG_info("\tSET %s (%s) TO %s (%s)\n", item->name, item->key, item->labels[item->value], item->values[item->value]);
 		// if (list->on_set) list->on_set(list, key);
 

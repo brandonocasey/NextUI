@@ -56,6 +56,10 @@ struct Core {
 	size_t (*get_memory_size)(unsigned id);
 
 	retro_core_options_update_display_callback_t update_visibility_callback;
+
+	bool has_netpacket;
+	bool show_netplay;
+	bool has_gblink;
 };
 
 struct Game {
@@ -127,6 +131,9 @@ extern int rewind_cfg_audio;
 extern int rewind_cfg_compress;
 extern int rewind_cfg_lz4_acceleration;
 extern int rewind_init_ready;
+extern int minarch_option_batch_mode;
+extern int minarch_option_batch_changed;
+extern int minarch_skip_video_output;
 
 #include "ma_rewind.h"
 
@@ -208,6 +215,7 @@ void Special_render(void);
 
 // Libretro environment callback (defined in minarch.c)
 bool environment_callback(unsigned cmd, void *data);
+void minarch_core_log_callback(enum retro_log_level level, const char* fmt, ...);
 
 enum {
 	FE_OPT_SCALING,
