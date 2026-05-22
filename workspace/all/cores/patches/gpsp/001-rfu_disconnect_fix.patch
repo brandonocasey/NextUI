@@ -1,0 +1,91 @@
+diff --git i/libretro/libretro.c w/libretro/libretro.c
+index 5f02c09..55ae5a1 100644
+--- i/libretro/libretro.c
++++ w/libretro/libretro.c
+@@ -513,6 +513,7 @@ static bool netpacket_connected(uint16_t client_id) {
+ }
+ 
+ static void netpacket_disconnected(uint16_t client_id) {
++  rfu_net_disconnect();
+   netplay_num_clients--;
+ }
+ 
+diff --git i/rfu.c w/rfu.c
+index d5add44..dec9995 100644
+--- i/rfu.c
++++ w/rfu.c
+@@ -119,6 +119,7 @@ static u32 rfu_prev_data;
+ static u32 rfu_comstate, rfu_cnt, rfu_state;
+ static u32 rfu_buf[255];
+ static u8 rfu_cmd, rfu_plen;
++static bool rfu_disconnect_pending = false;
+ static u32 rfu_timeout_cycles, rfu_resp_timeout;
+ static u8 rfu_timeout, rfu_rtx_max;
+ 
+@@ -241,6 +242,7 @@ void rfu_reset() {
+ 
+   // Clear all the received broadcasts.
+   memset(&rfu_peer_bcst, 0, sizeof(rfu_peer_bcst));
++  rfu_disconnect_pending = false;
+ 
+   // Re-seed random gen.  cpu_ticks is determined by the GBA program and
+   // is therefore replay-reproducible; time(NULL) is not, and would break
+@@ -250,6 +252,20 @@ void rfu_reset() {
+   rand_seed(cpu_ticks);
+ }
+ 
++void rfu_net_disconnect(void) {
++  RFU_DEBUG_LOG("RFU net disconnect! state=%d comstate=%d\n", rfu_state, rfu_comstate);
++
++  if (rfu_state == RFU_STATE_HOST) {
++    memset(&rfu_host.clients, 0, sizeof(rfu_host.clients));
++  }
++  else if (rfu_state == RFU_STATE_CLIENT) {
++    memset(&rfu_client, 0, sizeof(rfu_client));
++  }
++
++  rfu_state = RFU_STATE_IDLE;
++  rfu_disconnect_pending = true;
++}
++
+ static u16 new_devid() {
+   while (1) {
+     /* Mix in cpu_ticks (deterministic) rather than time(NULL) so the
+@@ -598,9 +614,17 @@ u32 rfu_transfer(u32 sent_value) {
+   case RFU_COMSTATE_WAITCMD:
+     // Wait for a new command, verify its header.
+     if ((sent_value >> 16) == 0x9966) {
+-      rfu_plen = (u8)(sent_value >> 8);
+-      rfu_cmd  = (u8)(sent_value);
+-      rfu_cnt = 0;
++      if (rfu_disconnect_pending && rfu_state == RFU_STATE_IDLE) {
++        rfu_cmd = RFU_CMD_WAIT;
++        rfu_plen = 0;
++        rfu_cnt = 0;
++        rfu_disconnect_pending = false;
++      }
++      else {
++        rfu_plen = (u8)(sent_value >> 8);
++        rfu_cmd  = (u8)(sent_value);
++        rfu_cnt = 0;
++      }
+       if (!rfu_plen) {
+         // Returns error code or response length
+         s32 ret = rfu_process_command();
+@@ -947,4 +971,3 @@ bool rfu_update(unsigned cycles) {
+ 
+   return false;
+ }
+-
+diff --git i/serial.h w/serial.h
+index 9f8c3d0..44a2691 100644
+--- i/serial.h
++++ w/serial.h
+@@ -43,6 +43,7 @@ void serial_set_irq_cycles(u32 v);
+ void rfu_reset(void);
+ bool rfu_update(unsigned cycles);
+ u32 rfu_transfer(u32 value);
++void rfu_net_disconnect(void);
+ void rfu_frame_update(void);
+ void rfu_net_receive(const void* buf, size_t len, uint16_t client_id);
+ 
