@@ -3,6 +3,7 @@
 #include <msettings.h>
 #include "ma_internal.h"
 #include "ma_audio.h"
+#include "netplay.h"
 
 static bool resetAudio = false;
 
@@ -33,6 +34,7 @@ void Audio_checkAndResetIfNeeded(void) {
 
 void audio_sample_callback(int16_t left, int16_t right) {
 	if (rewinding && !rewind_ctx.audio) return;
+	if (Netplay_shouldSilenceAudio()) return;
 	if (!fast_forward || ff_audio) {
 		if (use_core_fps || fast_forward) {
 			SND_batchSamples_fixed_rate(&(const SND_Frame){left,right}, 1);
@@ -45,6 +47,7 @@ void audio_sample_callback(int16_t left, int16_t right) {
 
 size_t audio_sample_batch_callback(const int16_t *data, size_t frames) {
 	if (rewinding && !rewind_ctx.audio) return frames;
+	if (Netplay_shouldSilenceAudio()) return frames;
 	if (!fast_forward || ff_audio) {
 		if (use_core_fps || fast_forward) {
 			return SND_batchSamples_fixed_rate((const SND_Frame*)data, frames);

@@ -22,6 +22,7 @@
 #include "ma_video.h"
 #include "ma_frontend_opts.h"
 #include "ma_menu.h"
+#include "netplay_helper.h"
 
 ///////////////////////////////
 
@@ -113,7 +114,7 @@ void MSG_quit(void) {
 
 ///////////////////////////////////////
 
-#define MENU_ITEM_COUNT 5
+#define MENU_ITEM_COUNT 6
 #define MENU_SLOT_COUNT 8
 
 enum {
@@ -121,6 +122,7 @@ enum {
 	ITEM_SAVE,
 	ITEM_LOAD,
 	ITEM_OPTS,
+	ITEM_NETPLAY,
 	ITEM_QUIT,
 };
 
@@ -162,6 +164,7 @@ static struct {
 		[ITEM_SAVE] = "Save",
 		[ITEM_LOAD] = "Load",
 		[ITEM_OPTS] = "Options",
+		[ITEM_NETPLAY] = "Netplay",
 		[ITEM_QUIT] = "Quit",
 	}
 };
@@ -220,6 +223,9 @@ void Menu_init(void) {
 }
 void Menu_quit(void) {
 	SDL_FreeSurface(menu.overlay);
+}
+SDL_Surface* Menu_getBitmap(void) {
+	return menu.bitmap;
 }
 void Menu_beforeSleep() {
 	SRAM_write();
@@ -1646,6 +1652,8 @@ void Menu_screenshot(void) {
 	}
 }
 void Menu_saveState(void) {
+	if (Multiplayer_isActive()) return;
+
 	// LOG_info("Menu_saveState\n");
 	Menu_updateState();
 	
@@ -1685,6 +1693,8 @@ void Menu_saveState(void) {
 	}
 }
 void Menu_loadState(void) {
+	if (Multiplayer_isActive()) return;
+
 	Menu_updateState();
 
 	if (menu.save_exists) {
@@ -1792,15 +1802,30 @@ void Menu_loop(void) {
 		uint32_t now = SDL_GetTicks();
 
 		PAD_poll();
+		if (Netplay_isConnected()) {
+			Netplay_pollWhilePaused();
+		}
+		int mp_active = Multiplayer_isActive();
+		if ((!core.show_netplay && selected==ITEM_NETPLAY) ||
+		    (mp_active && (selected==ITEM_SAVE || selected==ITEM_LOAD))) {
+			selected = ITEM_CONT;
+			dirty = 1;
+		}
 		
 		if (PAD_justPressed(BTN_UP)) {
-			selected -= 1;
-			if (selected<0) selected += MENU_ITEM_COUNT;
+			do {
+				selected -= 1;
+				if (selected<0) selected += MENU_ITEM_COUNT;
+			} while ((!core.show_netplay && selected==ITEM_NETPLAY) ||
+			         (mp_active && (selected==ITEM_SAVE || selected==ITEM_LOAD)));
 			dirty = 1;
 		}
 		else if (PAD_justPressed(BTN_DOWN)) {
-			selected += 1;
-			if (selected>=MENU_ITEM_COUNT) selected -= MENU_ITEM_COUNT;
+			do {
+				selected += 1;
+				if (selected>=MENU_ITEM_COUNT) selected -= MENU_ITEM_COUNT;
+			} while ((!core.show_netplay && selected==ITEM_NETPLAY) ||
+			         (mp_active && (selected==ITEM_SAVE || selected==ITEM_LOAD)));
 			dirty = 1;
 		}
 		else if (PAD_justPressed(BTN_LEFT)) {
@@ -1873,7 +1898,7 @@ void Menu_loop(void) {
 					else {
 						int old_scaling = screen_scaling;
 						Options_updateVisibility();
-						Menu_options(&options_menu);
+						int menu_result = Menu_options(&options_menu);
 						if (screen_scaling!=old_scaling) {
 							selectScaler(renderer.true_w,renderer.true_h,renderer.src_p);
 						
@@ -1884,11 +1909,27 @@ void Menu_loop(void) {
 							SDL_Rect dst = {0, 0, DEVICE_WIDTH, DEVICE_HEIGHT};
 							SDL_BlitScaled(menu.bitmap,NULL,backing,&dst);
 						}
+						if (menu_result == MENU_CALLBACK_EXIT && netplay_force_resume) {
+							netplay_force_resume = 0;
+							status = STATUS_CONT;
+							show_menu = 0;
+						}
 						dirty = 1;
 					}
 				}
 				break;
+				case ITEM_NETPLAY: {
+					LinkType link_type = core.has_netpacket ? LINK_TYPE_GBALINK :
+					                     core.has_gblink ? LINK_TYPE_GBLINK : LINK_TYPE_NETPLAY;
+					if (Netplay_menu_link(link_type)) {
+						status = STATUS_CONT;
+						show_menu = 0;
+					}
+					dirty = 1;
+				}
+				break;
 				case ITEM_QUIT:
+					Netplay_quitAll();
 					status = STATUS_QUIT;
 					show_menu = 0;
 					quit = 1; // TODO: tmp?
@@ -1936,8 +1977,15 @@ void Menu_loop(void) {
 			GFX_blitButtonGroup((char*[]){ "B","BACK", "A","OKAY", NULL }, 1, screen, 1);
 			
 			// list
-			oy = (((DEVICE_HEIGHT / FIXED_SCALE) - PADDING * 2) - (MENU_ITEM_COUNT * PILL_SIZE)) / 2;
+			int multiplayer_active = Multiplayer_isActive();
+			int visible_item_count = MENU_ITEM_COUNT;
+			if (!core.show_netplay) visible_item_count--;
+			if (multiplayer_active) visible_item_count -= 2;
+			oy = (((DEVICE_HEIGHT / FIXED_SCALE) - PADDING * 2) - (visible_item_count * PILL_SIZE)) / 2;
+			int render_idx = 0;
 			for (int i=0; i<MENU_ITEM_COUNT; i++) {
+				if (i == ITEM_NETPLAY && !core.show_netplay) continue;
+				if ((i == ITEM_SAVE || i == ITEM_LOAD) && multiplayer_active) continue;
 				char* item = menu.items[i];
 				SDL_Color text_color = COLOR_WHITE;
 				
@@ -1966,7 +2014,7 @@ void Menu_loop(void) {
 					// pill
 					GFX_blitPillDark(ASSET_WHITE_PILL, screen, &(SDL_Rect){
 						SCALE1(PADDING),
-						SCALE1(oy + PADDING + (i * PILL_SIZE)),
+						SCALE1(oy + PADDING + (render_idx * PILL_SIZE)),
 						ow,
 						SCALE1(PILL_SIZE)
 					});
@@ -1977,9 +2025,10 @@ void Menu_loop(void) {
 				text = TTF_RenderUTF8_Blended(font.large, item, text_color);
 				SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){
 					SCALE1(PADDING + BUTTON_PADDING),
-					SCALE1(oy + PADDING + (i * PILL_SIZE) + 4)
+					SCALE1(oy + PADDING + (render_idx * PILL_SIZE) + 4)
 				});
 				SDL_FreeSurface(text);
+				render_idx++;
 			}
 			
 			// slot preview

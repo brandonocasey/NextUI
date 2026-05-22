@@ -1,5 +1,7 @@
 #include "ma_internal.h"
 #include "ma_input.h"
+#include "netplay.h"
+#include "netplay_helper.h"
 
 #include <string.h>
 
@@ -30,6 +32,7 @@ void input_poll_callback(void) {
 	if (PAD_isPressed(BTN_MENU) && PAD_isPressed(BTN_SELECT)) {
 		ignore_menu = 1;
 		newScreenshot = 1;
+		Netplay_quitAll();
 		quit = 1;
 		Menu_saveState();
 		putFile(GAME_SWITCHER_PERSIST_PATH, game.path + strlen(SDCARD_PATH));
@@ -51,6 +54,12 @@ void input_poll_callback(void) {
 		int btn = 1 << mapping->local;
 		if (btn==BTN_NONE) continue; // not bound
 		if (!mapping->mod || PAD_isPressed(BTN_MENU)) {
+			// Disable FF/rewind hotkeys while multiplayer sessions are active.
+			if ((i==SHORTCUT_TOGGLE_FF || i==SHORTCUT_HOLD_FF ||
+			     i==SHORTCUT_HOLD_REWIND || i==SHORTCUT_TOGGLE_REWIND) &&
+			    Multiplayer_isActive()) {
+				continue;
+			}
 			if (i==SHORTCUT_TOGGLE_FF) {
 				if (PAD_justPressed(btn)) {
 					toggled_ff_on = setFastForward(!fast_forward);
@@ -150,11 +159,13 @@ void input_poll_callback(void) {
 					case SHORTCUT_RESET_GAME: core.reset(); break;
 					case SHORTCUT_SAVE_QUIT:
 						newScreenshot = 1;
+						Netplay_quitAll();
 						quit = 1;
 						Menu_saveState();
 						break;
 					case SHORTCUT_GAMESWITCHER:
 						newScreenshot = 1;
+						Netplay_quitAll();
 						quit = 1;
 						Menu_saveState();
 						putFile(GAME_SWITCHER_PERSIST_PATH, game.path + strlen(SDCARD_PATH));
@@ -218,21 +229,29 @@ void input_poll_callback(void) {
 
 }
 int16_t input_state_callback(unsigned port, unsigned device, unsigned index, unsigned id) {
-	if (port==0 && device==RETRO_DEVICE_JOYPAD && index==0) {
-		if (id == RETRO_DEVICE_ID_JOYPAD_MASK) return buttons;
-		return (buttons >> id) & 1;
+	uint32_t player_buttons = Netplay_getPlayerButtons(port, buttons);
+
+	if (device==RETRO_DEVICE_JOYPAD && index==0) {
+		if (id == RETRO_DEVICE_ID_JOYPAD_MASK) return player_buttons;
+		return (player_buttons >> id) & 1;
 	}
 	else if (port==0 && device==RETRO_DEVICE_ANALOG) {
-		if (index==RETRO_DEVICE_INDEX_ANALOG_LEFT) {
-			if (id==RETRO_DEVICE_ID_ANALOG_X) return pad.laxis.x;
-			else if (id==RETRO_DEVICE_ID_ANALOG_Y) return pad.laxis.y;
-		}
-		else if (index==RETRO_DEVICE_INDEX_ANALOG_RIGHT) {
-			if (id==RETRO_DEVICE_ID_ANALOG_X) return pad.raxis.x;
-			else if (id==RETRO_DEVICE_ID_ANALOG_Y) return pad.raxis.y;
+		// Analog stays local-only for now; clients read host analog through synced digital mapping.
+		if (!Netplay_isActive() || Netplay_getMode()==NETPLAY_HOST) {
+			if (index==RETRO_DEVICE_INDEX_ANALOG_LEFT) {
+				if (id==RETRO_DEVICE_ID_ANALOG_X) return pad.laxis.x;
+				else if (id==RETRO_DEVICE_ID_ANALOG_Y) return pad.laxis.y;
+			}
+			else if (index==RETRO_DEVICE_INDEX_ANALOG_RIGHT) {
+				if (id==RETRO_DEVICE_ID_ANALOG_X) return pad.raxis.x;
+				else if (id==RETRO_DEVICE_ID_ANALOG_Y) return pad.raxis.y;
+			}
 		}
 	}
 	return 0;
+}
+uint32_t Input_getButtonsMask(void) {
+	return buttons;
 }
 ///////////////////////////////
 

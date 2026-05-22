@@ -1,4 +1,6 @@
 #pragma once
+#include <SDL2/SDL.h>
+#include <stdbool.h>
 
 typedef struct MenuList MenuList; // forward declaration (full def in minarch_frontend_opts.h)
 
@@ -20,3 +22,4 @@ void Menu_initState(void);
 void Menu_loop(void);
 void Menu_setCoreVersionDesc(const char* version);
 void Menu_waitScreenshot(void);
+SDL_Surface* Menu_getBitmap(void);
