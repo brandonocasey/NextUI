@@ -81,6 +81,31 @@ For other devices we recommend checking out [MinUI](https://github.com/shauninma
 
 ---
 
+## LAN netplay and link support
+
+NextUI includes native LAN multiplayer support in MinArch (no Pak required, no runtime `.system` file replacement).
+
+- Off by default. No netplay/link session starts unless selected by the user.
+- Open in-game menu and select `Netplay` on supported cores.
+- Supports both normal WiFi LAN and device hotspot workflows.
+
+Supported cores:
+- Shared-screen netplay: `fbneo`, `fceumm`, `snes9x`, `mednafen_supafaust`, `picodrive`, `pcsx_rearmed`
+- GBA link: `gpSP`
+- GB/GBC link: `gambatte`
+
+Current limitations:
+- LAN/hotspot only (no internet relay/matchmaking)
+- 2 players
+- Shared-screen netplay expects matching ROM/version on both devices
+
+Troubleshooting:
+- If host/join fails, confirm both devices are on the same network or hotspot pair.
+- If GBA link fails to connect, ensure both sides use the same link mode.
+- Netplay menu is hidden on unsupported cores by design.
+
+---
+
 ## Installing
 
 Follow our [installation guide](https://nextui.loveretro.games/usage/#getting-started).
@@ -120,6 +145,7 @@ Our wiki has a [list of all available Paks](https://nextui.loveretro.games/pak-s
 
 - [josegonzalez](https://github.com/josegonzalez) for [minui-keyboard](https://github.com/josegonzalez/minui-keyboard)
 - [knulli-cfw](https://github.com/knulli-cfw)/[Mikhailzrick](https://github.com/Mikhailzrick) for [fan-control-daemon](https://github.com/knulli-cfw/knulli-linux/commit/5c1b4724330b59cbe8af79d0a7f1dac86f1c221a)
+- [mohammadsyuhada](https://github.com/mohammadsyuhada) for the [nextui-netplay](https://github.com/mohammadsyuhada/nextui-netplay) reference implementation used for this native integration
 
 ---
 
